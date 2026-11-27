@@ -2627,13 +2627,13 @@ module.exports.CreateDB = function (parent, func) {
                     query = query + ") ORDER BY time DESC";
                 } else {
                     if (ids.length == 0) { ids = ''; } // MySQL can't handle a query with IN() on an empty array, we have to use an empty string instead.
-                    query = query + "JOIN eventids ON id = fkid WHERE (domain = ? AND target IN (?)";
+                    query = query + "WHERE (domain = ? AND id IN (SELECT fkid FROM eventids WHERE target IN (?))";
                     dataarray.push(ids);
                     if (filter != null) {
                         query = query + " AND action = ?";
                         dataarray.push(filter);
                     }
-                    query = query + ") GROUP BY id ORDER BY time DESC";
+                    query = query + ") ORDER BY time DESC";
                 }
                 sqlDbQuery(query, dataarray, func);
             };
@@ -2649,13 +2649,13 @@ module.exports.CreateDB = function (parent, func) {
                     query = query + ") ORDER BY time DESC LIMIT ?";
                 } else {
                     if (ids.length == 0) { ids = ''; } // MySQL can't handle a query with IN() on an empty array, we have to use an empty string instead.
-                    query = query + "JOIN eventids ON id = fkid WHERE (domain = ? AND target IN (?)";
+                    query = query + "WHERE (domain = ? AND id IN (SELECT fkid FROM eventids WHERE target IN (?))";
                     dataarray.push(ids);
                     if (filter != null) {
                         query = query + " AND action = ?";
                         dataarray.push(filter);
                     }
-                    query = query + ") GROUP BY id ORDER BY time DESC LIMIT ?";
+                    query = query + ") ORDER BY time DESC LIMIT ?";
                 }
                 dataarray.push(limit);
                 sqlDbQuery(query, dataarray, func);
@@ -2672,13 +2672,13 @@ module.exports.CreateDB = function (parent, func) {
                     query = query + ") ORDER BY time DESC";
                 } else {
                     if (ids.length == 0) { ids = ''; } // MySQL can't handle a query with IN() on an empty array, we have to use an empty string instead.
-                    query = query + "JOIN eventids ON id = fkid WHERE (domain = ? AND userid = ? AND target IN (?)";
+                    query = query + "WHERE (domain = ? AND userid = ? AND id IN (SELECT fkid FROM eventids WHERE target IN (?))";
                     dataarray.push(ids);
                     if (filter != null) {
                         query = query + " AND action = ?";
                         dataarray.push(filter);
                     }
-                    query = query + ") GROUP BY id ORDER BY time DESC";
+                    query = query + ") ORDER BY time DESC";
                 }
                 sqlDbQuery(query, dataarray, func);
             };
@@ -2694,13 +2694,13 @@ module.exports.CreateDB = function (parent, func) {
                     query = query + ") ORDER BY time DESC LIMIT ?";
                 } else {
                     if (ids.length == 0) { ids = ''; } // MySQL can't handle a query with IN() on an empty array, we have to use an empty string instead.
-                    query = query + "JOIN eventids ON id = fkid WHERE (domain = ? AND userid = ? AND target IN (?)";
+                    query = query + "WHERE (domain = ? AND userid = ? AND id IN (SELECT fkid FROM eventids WHERE target IN (?))";
                     dataarray.push(ids);
                     if (filter != null) {
                         query = query + " AND action = ?";
                         dataarray.push(filter);
                     }
-                    query = query + ") GROUP BY id ORDER BY time DESC LIMIT ?";
+                    query = query + ") ORDER BY time DESC LIMIT ?";
                 }
                 dataarray.push(limit);
                 sqlDbQuery(query, dataarray, func);
@@ -2710,7 +2710,7 @@ module.exports.CreateDB = function (parent, func) {
                     sqlDbQuery('SELECT doc FROM events WHERE ((domain = ?) AND (time BETWEEN ? AND ?)) ORDER BY time', [domain, start, end], func);
                 } else {
                     if (ids.length == 0) { ids = ''; } // MySQL can't handle a query with IN() on an empty array, we have to use an empty string instead.
-                    sqlDbQuery('SELECT doc FROM events JOIN eventids ON id = fkid WHERE ((domain = ?) AND (target IN (?)) AND (time BETWEEN ? AND ?)) GROUP BY id ORDER BY time', [domain, ids, start, end], func);
+                    sqlDbQuery('SELECT doc FROM events WHERE ((domain = ?) AND (id IN (SELECT fkid FROM eventids WHERE target IN (?))) AND (time BETWEEN ? AND ?)) ORDER BY time', [domain, ids, start, end], func);
                 }
             };
             //obj.GetUserLoginEvents = function (domain, userid, func) { } // TODO
@@ -2783,8 +2783,8 @@ module.exports.CreateDB = function (parent, func) {
                 obj.deletePlugin = function (id, func) { sqlDbQuery('DELETE FROM plugin WHERE id = ?', [id], func); }; // Delete plugin
                 obj.setPluginStatus = function (id, status, func) { sqlDbQuery('UPDATE meshcentral.plugin SET doc=JSON_SET(doc,"$.status",?) WHERE id=?', [status,id], func); };
                 obj.updatePlugin = function (id, args, func) { delete args._id; sqlDbQuery('UPDATE meshcentral.plugin SET doc=JSON_MERGE_PATCH(doc,?) WHERE id=?', [JSON.stringify(args),id], func); };
-                obj.getPluginPermissions = function (pluginName, func) { sqlDbQuery('SELECT doc FROM pluginpermissions WHERE id = $1', ['pluginpermission//' + pluginName], function(err, docs) { if (docs && docs.length > 0) { func(null, [docs[0].doc]); } else { func(null, []); } }); };
-                obj.setPluginPermissions = function (pluginName, data, func) { delete data._id; sqlDbQuery('INSERT INTO pluginpermissions VALUES ($1, $2) ON DUPLICATE KEY UPDATE doc = $2', ['pluginpermission//' + pluginName, JSON.stringify(data)], func); };
+                obj.getPluginPermissions = function (pluginName, func) { sqlDbQuery('SELECT doc FROM pluginpermissions WHERE id = ?', ['pluginpermission//' + pluginName], function(err, docs) { if (docs && docs.length > 0) { func(null, [docs[0]]); } else { func(null, []); } }); };
+                obj.setPluginPermissions = function (pluginName, data, func) { delete data._id; sqlDbQuery('REPLACE INTO pluginpermissions VALUE (?, ?)', ['pluginpermission//' + pluginName, JSON.stringify(data)], func); };
             }
         } else if (obj.databaseType == DB_MONGODB) {
             // Database actions on the main collection (MongoDB)

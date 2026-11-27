@@ -3982,11 +3982,21 @@
                         if (!message.tags.current) { message.tags.current = "Unknown"; }
                         if (!message.tags.stable) { message.tags.stable = "Unknown"; }
                         if (!message.tags.latest) { message.tags.latest = "Unknown"; }
+                        // Whether the running Node.js version satisfies the engine requirement for each target.
+                        var stableOk = (message.tags.stableUpdateOk !== false);
+                        var latestOk = (message.tags.latestUpdateOk !== false);
                         x += addHtmlValue2("Current Version", '<b>' + EscapeHtml(message.tags.current) + '</b>');
                         x += '<hr />';
-                        x += addHtmlValue2('<label><input id=d2updateCheck1 type=checkbox class="form-check-input me-2" onclick=server_showVersionDlgUpdate()' + (((message.tags.stable == "Unknown") || (message.tags.current == message.tags.stable) || ((features & 2048) == 0)) ? ' disabled' : '') + ' /> ' + "Stable Version" + '</label>', '<b>' + EscapeHtml(message.tags.stable) + '</b>');
-                        x += addHtmlValue2('<label><input id=d2updateCheck2 type=checkbox class="form-check-input me-2" onclick=server_showVersionDlgUpdate()' + (((message.tags.latest == "Unknown") || (message.tags.current == message.tags.latest) || ((features & 2048) == 0)) ? ' disabled' : '') + ' /> ' + "Latest Version" + '</label>', '<b>' + EscapeHtml(message.tags.latest) + '</b>');
+                        x += addHtmlValue2('<label><input id=d2updateCheck1 type=checkbox class="form-check-input me-2" onclick=server_showVersionDlgUpdate()' + (((message.tags.stable == "Unknown") || (message.tags.current == message.tags.stable) || ((features & 2048) == 0) || (stableOk == false)) ? ' disabled' : '') + (message.tags.stableEnginesNode ? ' title="' + "This update requires Node.js" + ' ' + EscapeHtml(message.tags.stableEnginesNode) + '"' : '') + ' /> ' + "Stable Version" + '</label>', '<b>' + EscapeHtml(message.tags.stable) + '</b>');
+                        x += addHtmlValue2('<label><input id=d2updateCheck2 type=checkbox class="form-check-input me-2" onclick=server_showVersionDlgUpdate()' + (((message.tags.latest == "Unknown") || (message.tags.current == message.tags.latest) || ((features & 2048) == 0) || (latestOk == false)) ? ' disabled' : '') + (message.tags.latestEnginesNode ? ' title="' + "This update requires Node.js" + ' ' + EscapeHtml(message.tags.latestEnginesNode) + '"' : '') + ' /> ' + "Latest Version" + '</label>', '<b>' + EscapeHtml(message.tags.latest) + '</b>');
                         x += '</div>';
+                        // Warn about any Node.js version incompatibility for the available update targets.
+                        if ((features & 2048) != 0) {
+                            var warn = '';
+                            if (!stableOk) { warn += "Stable version is not compatible with the running Node.js version" + ' (' + EscapeHtml(message.tags.hostNodeVersion) + ').'; }
+                            if (!latestOk) { if (warn != '') { warn += ' '; } warn += "Latest version is not compatible with the running Node.js version" + ' (' + EscapeHtml(message.tags.hostNodeVersion) + ').'; }
+                            if (warn != '') { x += '<div style=color:red>' + warn + ' ' + "The current version is being kept." + '</div>'; }
+                        }
                         if (((message.tags.current == message.tags.latest) && (message.tags.current == message.tags.stable)) || ((features & 2048) == 0)) {
                             setModalContent('xxAddAgent', "MeshCentral Version", x);
                             showModal('xxAddAgentModal', 'idx_dlgOkButton');
@@ -7037,37 +7047,41 @@
         * @param {*} [b=null] - An optional parameter passed to the callback.
         * @param {*} [tag=null] - Another optional parameter passed to the callback.
         */
+        var xxModalPendingOpen = null;
+
         function showModal(modalId, okButtonId, okCallback, b = null, tag = null) {
+            if (xxModal != null && (xxModalHidePending || xxModal._isTransitioning)) {
+                xxModalPendingOpen = function () { showModal(modalId, okButtonId, okCallback, b, tag); };
+                return;
+            }
             if (xxModal == null) {
-                ['idx_dlgOkButton', 'idx_dlgCancelButton', 'idx_dlgDeleteButton'].forEach(function (id) { // clear existing onclick, enable buttons and show them
-                    Q(id).onclick = null;
-                    QE(id, (id != 'idx_dlgDeleteButton' ? true : false));
-                    QV(id, (id != 'idx_dlgDeleteButton' ? true : false));
-                });
                 xxModal = new bootstrap.Modal(document.getElementById(modalId));
                 xxModalShown = false; xxModalHidePending = false;
-                // mark shown so a hide deferred during the fade-in can fire
                 var shownModal = function (event) {
                     xxModalShown = true;
-                    document.getElementById(modalId).removeEventListener('shown.bs.modal', shownModal);
                     if (xxModalHidePending) { xxModalHidePending = false; if (xxModal) xxModal.hide(); }
-                }
+                };
                 document.getElementById(modalId).addEventListener('shown.bs.modal', shownModal);
                 var hiddenModal = function (event) {
-                    if (xxModal) { xxModal.dispose(); xxModal = null; }
                     xxModalShown = false; xxModalHidePending = false;
                     if (xxdialogMode != 0) { xxdialogMode = 0; }
-                    document.getElementById(modalId).removeEventListener('hidden.bs.modal', hiddenModal);
-                }
+                    if (xxModalPendingOpen) { var fn = xxModalPendingOpen; xxModalPendingOpen = null; fn(); }
+                };
                 document.getElementById(modalId).addEventListener('hidden.bs.modal', hiddenModal);
             }
-            xxModal.show();
+            ['idx_dlgOkButton', 'idx_dlgCancelButton', 'idx_dlgDeleteButton'].forEach(function (id) { // clear existing onclick, enable buttons and show them
+                Q(id).onclick = null;
+                QE(id, (id != 'idx_dlgDeleteButton' ? true : false));
+                QV(id, (id != 'idx_dlgDeleteButton' ? true : false));
+            });
+            var showCount = (xxModal._showCount = (xxModal._showCount || 0) + 1);
+            if (!xxModal._isShown) { xxModal.show(); }
             document.getElementById(okButtonId).onclick = function () {
                 if (typeof okCallback === 'function' && okCallback) {
                     xxdialogMode = 0; // reset xxdialogMode back to 0 because we might be opening up another dialog and it checks if one is already open
                     var callbackResult = okCallback(b, tag);
-                    // Close the modal by default unless `false` is explicitly returned from the callback function
-                    if (callbackResult !== false) { xxModal.hide(); }
+                    // Close the modal by default unless `false` is explicitly returned or okCallback opened another modal
+                    if (callbackResult !== false && xxModal && xxModal._showCount === showCount && !xxModalPendingOpen) { xxModal.hide(); }
                 } else {
                     if (xxModal) { xxModal.hide(); }
                 }
@@ -7920,7 +7934,7 @@
                 case 1: { // Terminal connect button context menu
                     if ((currentNode == null) || (currentNode.agent == null) || (currentNode.mtype == 3)) return true;
                     // If the server has a specific terminal shell mode, don't show connection options
-                    if (serverinfo.linuxshell && (currentNode.agent.id > 4)) return;
+                    if (serverinfo.linuxshell && (currentNode.agent.id > 4) && !isWindowsNode(currentNode)) return;
                     var nextElement = event.target.nextElementSibling;
                     if (nextElement) {
                         var children = nextElement.children;  // This will get only element nodes
@@ -12178,7 +12192,7 @@
             } else {
                 // Agent desktop
                 if (flags & 1) { keyArray.push([desktop.m.KeyAction.DOWN, 16]); keyArray2.push([desktop.m.KeyAction.UP, 16]); } // Shift
-                if (flags & 2) { keyArray.push([desktop.m.KeyAction.EXDOWN, 18]); keyArray2.push([desktop.m.KeyAction.EXUP, 18]); } // Left-alt
+                if (flags & 2) { keyArray.push([desktop.m.KeyAction.DOWN, 18]); keyArray2.push([desktop.m.KeyAction.UP, 18]); } // Left-alt
                 if (flags & 8) { keyArray.push([desktop.m.KeyAction.EXDOWN, 17]); keyArray2.push([desktop.m.KeyAction.EXUP, 17]); } // Ctrl
                 if (flags & 16) { keyArray.push([desktop.m.KeyAction.EXDOWN, 0x5B]); keyArray2.push([desktop.m.KeyAction.EXUP, 0x5B]); } // Windows key
                 if (key != 0) { keyArray.push([desktop.m.KeyAction.DOWN, key]); keyArray2.push([desktop.m.KeyAction.UP, key]); }
@@ -13391,7 +13405,7 @@
                     }
 
                     // If the server requires a shell type
-                    if ((serverinfo.linuxshell) != null && (currentNode.agent.id > 4)) {
+                    if ((serverinfo.linuxshell) != null && (currentNode.agent.id > 4) && !isWindowsNode(currentNode)) {
                         if (serverinfo.linuxshell == 'root') { termoptions.protocol = 1; delete termoptions.requireLogin; }
                         if (serverinfo.linuxshell == 'user') { termoptions.protocol = 8; delete termoptions.requireLogin; }
                         if (serverinfo.linuxshell == 'login') { termoptions.protocol = 1; termoptions.requireLogin = true; }
@@ -14356,24 +14370,38 @@
             // Display a dialog message
             if (data.action == 'dialogmessage') {
                 if ((data.msg == null) && (xxdialogTag == 'fileMsgDialog')) {
+                        xxdialogTag = null;
+                        xxModalPendingOpen = null;
+                        setDialogMode(0); // Close the dialog box
+                        return;
+                    }
+
+                if (xxdialogMode && xxdialogTag != 'fileMsgDialog') return;
+
+                if ((data.msg == null) && (xxdialogTag == 'fileMsgDialog')) {
                     setDialogMode(0); // Close the dialog box
                 } else if ((data.msg == 'zipping') && ((!xxdialogMode) || (xxdialogTag == 'fileMsgDialog'))) {
                     // Show the dialog box message
+                    xxdialogMode = 1; xxdialogTag = 'fileMsgDialog';
                     setModalContent('xxAddAgent', "File Operation", '<div style=margin:10px>' + "Compressing files..." + '</div>');
+                    showModal('xxAddAgentModal', 'idx_dlgOkButton', () => p13fileOperationDialogEx(10));
+                } else if ((data.msg == 'zippingFile') && ((!xxdialogMode) || (xxdialogTag == 'fileMsgDialog'))) {
+                    // Show the dialog box message
+                    xxdialogMode = 1; xxdialogTag = 'fileMsgDialog';
+                    setModalContent('xxAddAgent', "File Operation", '<div style=margin:10px>' + EscapeHtml(data.file) + '</div><br /><progress value=' + EscapeHtml(data.progress) + ' style=width:100% max=100 />');
                     showModal('xxAddAgentModal', 'idx_dlgOkButton', () => p13fileOperationDialogEx(10));
                 } else if ((data.msg == 'unzipping') && ((!xxdialogMode) || (xxdialogTag == 'fileMsgDialog'))) {
                     // Show the dialog box message
+                    xxdialogMode = 1; xxdialogTag = 'fileMsgDialog';
                     setModalContent('xxAddAgent', "File Operation", '<div style=margin:10px>' + "Unzipping file..." + '</div>');
                     showModal('xxAddAgentModal', 'idx_dlgOkButton');
                 } else if ((data.msg == 'unziperror') && ((!xxdialogMode) || (xxdialogTag == 'fileMsgDialog'))) {
                     // Show the dialog box message
+                    xxdialogMode = 1; xxdialogTag = 'fileMsgDialog';
                     setModalContent('xxAddAgent', "File Operation", '<div style=margin:10px>' + "Unzipping Error" + '</div><br />' + EscapeHtml(data.error));
                     showModal('xxAddAgentModal', 'idx_dlgOkButton');
-                } else if ((data.msg == 'zippingFile') && ((!xxdialogMode) || (xxdialogTag == 'fileMsgDialog'))) {
-                    // Show the dialog box message
-                    setModalContent('xxAddAgent', "File Operation", '<div style=margin:10px>' + EscapeHtml(data.file) + '</div><br /><progress value=' + EscapeHtml(data.progress) + ' style=width:100% max=100 />');
-                    showModal('xxAddAgentModal', 'idx_dlgOkButton', () => p13fileOperationDialogEx(10));
                 }
+
                 return;
             }
 
@@ -14846,7 +14874,10 @@
                 }
             }
             setModalContent('xxAddAgent', "Unzip To Folder", '<input type=text id=p13unzipfolderinput maxlength=64 style=width:100% value="' + dest + '" />');
-            showModal('xxAddAgentModal', 'idx_dlgOkButton', p13unzipFileEx(3, { action: 'unzip', input: input }));
+            showModal('xxAddAgentModal', 'idx_dlgOkButton', () => {
+                xxdialogTag = 'fileMsgDialog';
+                p13unzipFileEx(3, { action: 'unzip', input: input });
+            });
             focusTextBox('p13unzipfolderinput');
         }
 
@@ -16186,7 +16217,7 @@
                     x += '<td style="text-align:center">';
                     var userRights = GetNodeRights(currentNode);				
 					if (hasUninstall && (userRights == 0xFFFFFFFF)) {
-						x += '<button class="btn btn-sm btn-secondary" onclick="uninstallDesktopApp(\'' + encodeURIComponent(app.uninstall) + '\')">Uninstall</button>';
+						x += '<button class="btn btn-sm btn-secondary" onclick="uninstallDesktopApp(\'' + encodeURIComponentEx(app.uninstall) + '\')">Uninstall</button>';
 					} else {
 						x += '<span style="color:var(--bs-secondary)">-</span>';
 					}
@@ -23341,7 +23372,7 @@
             QV('uiMenu', false);
 
             // If "shift" is pressed, open a new tab.
-            if (event && ((event.shiftKey == true) || (event.which == 2) || (event.button == 1)) && (x != 15) && ('{{{currentNode}}}'.toLowerCase() == '')) {
+            if (event && ((event.shiftKey == true) || (event.which == 2) || (event.button == 1)) && (x != 15) && ('{{currentNode}}'.toLowerCase() == '')) {
                 // Open the device in a different tab
                 event.preventDefault();
                 if ((x >= 9) && (x <= 19)) {
@@ -24684,11 +24715,11 @@
         function getUserName(userid) {
             var useridsplit = userid.split('/'), userid2 = useridsplit[0] + '/' + useridsplit[1] + '/' + useridsplit[2], guestname = '';
             if ((useridsplit.length == 4) && (useridsplit[3].startsWith('guest:'))) { guestname = ' - ' + EscapeHtml(decode_utf8(atob(useridsplit[3].substring(6)))); }
-            if (users && users[userid2] != null) { if (users[userid2].realname != null) return (users[userid2].realname + guestname); else return (users[userid2].name + guestname); }
-            if (currentNode && currentNode.links && currentNode.links[userid] && currentNode.links[userid].name != null) { return (currentNode.links[userid].name + guestname); }
-            if (userid == userinfo._id) { return (userinfo.name + guestname); }
-            if (nodes) { for (var a in nodes) { if (nodes[a].links) { for (var b in nodes[a].links) { if (nodes[a].links[b].name && b == userid) return (nodes[a].links[b].name + guestname); } } } }
-            if (meshes) { for (var a in meshes) { if (meshes[a].links) { for (var b in meshes[a].links) { if (meshes[a].links[b].name && b == userid) return (meshes[a].links[b].name + guestname); } } } }
+            if (users && users[userid2] != null) { if (users[userid2].realname != null) return (EscapeHtml(users[userid2].realname) + guestname); else return (EscapeHtml(users[userid2].name) + guestname); }
+            if (currentNode && currentNode.links && currentNode.links[userid] && currentNode.links[userid].name != null) { return (EscapeHtml(currentNode.links[userid].name) + guestname); }
+            if (userid == userinfo._id) { return (EscapeHtml(userinfo.name) + guestname); }
+            if (nodes) { for (var a in nodes) { if (nodes[a].links) { for (var b in nodes[a].links) { if (nodes[a].links[b].name && b == userid) return (EscapeHtml(nodes[a].links[b].name) + guestname); } } } }
+            if (meshes) { for (var a in meshes) { if (meshes[a].links) { for (var b in meshes[a].links) { if (meshes[a].links[b].name && b == userid) return (EscapeHtml(meshes[a].links[b].name) + guestname); } } } }
             return (EscapeHtml(useridsplit[2]) + guestname);
         }
         function round(value, precision) { var multiplier = Math.pow(10, precision || 0); return Math.round(value * multiplier) / multiplier; }

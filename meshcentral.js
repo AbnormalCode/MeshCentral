@@ -636,33 +636,56 @@ function CreateMeshCentralServer(config, args) {
                 const npmproxy = ((typeof obj.args.npmproxy == 'string') ? (' --proxy ' + obj.args.npmproxy) : '');
                 const env = Object.assign({}, process.env); // Shallow clone
                 if (typeof obj.args.npmproxy == 'string') { env['HTTP_PROXY'] = env['HTTPS_PROXY'] = env['http_proxy'] = env['https_proxy'] = obj.args.npmproxy; }
-                // always use --save-exact - https://stackoverflow.com/a/64507176/1210734
-                const xxprocess = child_process.exec(npmpath + ' install --save-exact --no-audit meshcentral' + version + npmproxy, { maxBuffer: Infinity, cwd: obj.parentpath, env: env }, function (error, stdout, stderr) {
-                    if ((error != null) && (error != '')) { console.log('Update failed: ' + error); }
-                });
-                xxprocess.data = '';
-                xxprocess.stdout.on('data', function (data) { xxprocess.data += data; });
-                xxprocess.stderr.on('data', function (data) { xxprocess.data += data; });
-                xxprocess.on('close', function (code) {
-                    if (code == 0) { console.log('Update completed...'); }
-
-                    // Run the server updated script if present
-                    if (typeof obj.config.settings.runonserverupdated == 'string') {
-                        const child_process = require('child_process');
-                        var parentpath = __dirname;
-                        if ((__dirname.endsWith('/node_modules/meshcentral')) || (__dirname.endsWith('\\node_modules\\meshcentral')) || (__dirname.endsWith('/node_modules/meshcentral/')) || (__dirname.endsWith('\\node_modules\\meshcentral\\'))) { parentpath = require('path').join(__dirname, '../..'); }
-                        child_process.exec(obj.config.settings.runonserverupdated + ' ' + getCurrentVersion(), { maxBuffer: 512000, timeout: 120000, cwd: parentpath }, function (error, stdout, stderr) { });
+                // Before updating, check the remote package's required Node.js engine.
+                // If the host's Node.js version does not satisfy it, abort the update and
+                // keep the current running version intact instead of corrupting the install.
+                child_process.exec(npmpath + npmproxy + ' view meshcentral' + version + ' engines.node', { maxBuffer: 512000, cwd: obj.parentpath, env: env }, function (error, stdout) {
+                    var enginesNode = '';
+                    if (error == null && stdout) { try { enginesNode = stdout.split('\r').join('').split('\n').join('').trim(); } catch (ex) { } }
+                    var nodeCompatible = true;
+                    var nodeReason = '';
+                    if (enginesNode) {
+                        try {
+                            if (!common.nodeVersionSatisfies(process.versions.node, enginesNode)) {
+                                nodeCompatible = false;
+                                nodeReason = 'the requested MeshCentral package requires Node.js ' + enginesNode + ' but this host is running ' + process.version + '.';
+                            }
+                        } catch (ex) { /* If we can't parse the requirement, don't block the update. */ }
                     }
-
-                    if (obj.args.cleannpmcacheonupdate === true) {
-                        // Perform NPM cache clean
-                        console.log('Cleaning NPM cache...');
-                        const xxxprocess = child_process.exec(npmpath + ' cache clean --force', { maxBuffer: Infinity, cwd: obj.parentpath, env: env }, function (error, stdout, stderr) { });
-                        xxxprocess.on('close', function (code) { setTimeout(function () { obj.launchChildServer(startArgs); }, 1000); });
-                    } else {
-                        // Run the updated server
+                    if (!nodeCompatible) {
+                        console.log('WARNING: MeshCentral self-update aborted. ' + nodeReason + ' The current version is being kept intact.');
+                        // Relaunch the current server so the installation stays intact.
                         setTimeout(function () { obj.launchChildServer(startArgs); }, 1000);
+                        return;
                     }
+                    // always use --save-exact - https://stackoverflow.com/a/64507176/1210734
+                    const xxprocess = child_process.exec(npmpath + ' install --save-exact --no-audit meshcentral' + version + npmproxy, { maxBuffer: Infinity, cwd: obj.parentpath, env: env }, function (error, stdout, stderr) {
+                        if ((error != null) && (error != '')) { console.log('Update failed: ' + error); }
+                    });
+                    xxprocess.data = '';
+                    xxprocess.stdout.on('data', function (data) { xxprocess.data += data; });
+                    xxprocess.stderr.on('data', function (data) { xxprocess.data += data; });
+                    xxprocess.on('close', function (code) {
+                        if (code == 0) { console.log('Update completed...'); }
+
+                        // Run the server updated script if present
+                        if (typeof obj.config.settings.runonserverupdated == 'string') {
+                            const child_process = require('child_process');
+                            var parentpath = __dirname;
+                            if ((__dirname.endsWith('/node_modules/meshcentral')) || (__dirname.endsWith('\\node_modules\\meshcentral')) || (__dirname.endsWith('/node_modules/meshcentral/')) || (__dirname.endsWith('\\node_modules\\meshcentral\\'))) { parentpath = require('path').join(__dirname, '../..'); }
+                            child_process.exec(obj.config.settings.runonserverupdated + ' ' + getCurrentVersion(), { maxBuffer: 512000, timeout: 120000, cwd: parentpath }, function (error, stdout, stderr) { });
+                        }
+
+                        if (obj.args.cleannpmcacheonupdate === true) {
+                            // Perform NPM cache clean
+                            console.log('Cleaning NPM cache...');
+                            const xxxprocess = child_process.exec(npmpath + ' cache clean --force', { maxBuffer: Infinity, cwd: obj.parentpath, env: env }, function (error, stdout, stderr) { });
+                            xxxprocess.on('close', function (code) { setTimeout(function () { obj.launchChildServer(startArgs); }, 1000); });
+                        } else {
+                            // Run the updated server
+                            setTimeout(function () { obj.launchChildServer(startArgs); }, 1000);
+                        }
+                    });
                 });
             } else {
                 if (error != null) {
@@ -687,7 +710,10 @@ function CreateMeshCentralServer(config, args) {
                 }
             }
         });
+        var partialOutput = [];
         childProcess.stdout.on('data', function (data) {
+            if (data[data.length - 1] != '\n') { partialOutput.push(data); return; } // Large output arrives in chunks (64k), wait for the end of the line
+            if (partialOutput.length > 0) { data = partialOutput.join('') + data; partialOutput = []; }
             if (data[data.length - 1] == '\n') { data = data.substring(0, data.length - 1); }
             if (data.indexOf('Updating settings folder...') >= 0) { childProcess.xrestart = 1; }
             else if (data.indexOf('Updating server certificates...') >= 0) { childProcess.xrestart = 1; }
@@ -732,7 +758,7 @@ function CreateMeshCentralServer(config, args) {
             if (data[data.length - 1] == '\n') { data = data.substring(0, data.length - 1); }
             obj.logError(data);
         });
-        childProcess.on('close', function (code) { if ((code != 0) && (code != 123)) { /* console.log("Exited with code " + code); */ } });
+        childProcess.on('close', function (code) { if (partialOutput.length > 0) { logFromChildProcess(partialOutput.join('')); } if ((code != 0) && (code != 123)) { /* console.log("Exited with code " + code); */ } });
     };
 
     obj.logError = function (err) {
@@ -780,16 +806,64 @@ function CreateMeshCentralServer(config, args) {
             xxprocess.stdout.on('data', function (data) { xxprocess.data += data; });
             xxprocess.stderr.on('data', function (data) { });
             xxprocess.on('close', function (code) {
-                var tags = { current: getCurrentVersion() };
+                var tags = { current: getCurrentVersion(), hostNodeVersion: process.versions.node };
                 if (code == 0) {
                     try {
                         var lines = xxprocess.data.split('\r\n').join('\n').split('\n');
                         for (var i in lines) { var s = lines[i].split(': '); if ((s.length == 2) && (obj.args.npmtag == null) || (obj.args.npmtag == s[0])) { tags[s[0]] = s[1]; } }
                     } catch (ex) { }
                 }
-                callback(tags);
+                // Determine whether the running Node.js version satisfies the engine requirement for
+                // each available update target, so the web UI can refuse incompatible self-updates
+                // instead of starting one that will be aborted after a restart.
+                var hostNode = process.versions.node;
+                var pending = 0;
+                function finish() {
+                    tags.latestUpdateOk = (tags.latestUpdateOk !== false);
+                    tags.stableUpdateOk = (tags.stableUpdateOk !== false);
+                    callback(tags);
+                }
+                if (tags.latest && tags.latest != 'Unknown') {
+                    pending++;
+                    obj.getServerEngines(tags.latest, function (eng) {
+                        if (eng) { tags.latestEnginesNode = eng; tags.latestUpdateOk = common.nodeVersionSatisfies(hostNode, eng); }
+                        else { tags.latestUpdateOk = true; } // Could not determine requirement -> don't block.
+                        if (--pending == 0) finish();
+                    });
+                }
+                if (tags.stable && tags.stable != 'Unknown') {
+                    pending++;
+                    obj.getServerEngines(tags.stable, function (eng) {
+                        if (eng) { tags.stableEnginesNode = eng; tags.stableUpdateOk = common.nodeVersionSatisfies(hostNode, eng); }
+                        else { tags.stableUpdateOk = true; }
+                        if (--pending == 0) finish();
+                    });
+                }
+                if (pending == 0) finish();
             });
         } catch (ex) { callback({ current: getCurrentVersion() }, ex); } // If the system is running out of memory, an exception here can easily happen.
+    };
+
+    // Use NPM to get the "engines.node" requirement for a given meshcentral tag/version
+    obj.getServerEngines = function (npmTag, callback) {
+        try {
+            const child_process = require('child_process');
+            const npmpath = ((typeof obj.args.npmpath == 'string') ? obj.args.npmpath : 'npm');
+            const npmproxy = ((typeof obj.args.npmproxy == 'string') ? (' --proxy ' + obj.args.npmproxy) : '');
+            const env = Object.assign({}, process.env); // Shallow clone
+            if (typeof obj.args.npmproxy == 'string') { env['HTTP_PROXY'] = env['HTTPS_PROXY'] = env['http_proxy'] = env['https_proxy'] = obj.args.npmproxy; }
+            var target = 'meshcentral';
+            if (typeof npmTag == 'string') { target += '@' + npmTag; }
+            const xxprocess = child_process.exec(npmpath + npmproxy + ' view ' + target + ' engines.node', { maxBuffer: 512000, cwd: obj.parentpath, env: env }, function (error, stdout, stderr) { });
+            xxprocess.data = '';
+            xxprocess.stdout.on('data', function (data) { xxprocess.data += data; });
+            xxprocess.stderr.on('data', function (data) { xxprocess.data += data; });
+            xxprocess.on('close', function (code) {
+                var enginesNode = '';
+                if (code == 0) { try { enginesNode = xxprocess.data.split('\r').join('').split('\n').join('').trim(); } catch (ex) { } }
+                callback(enginesNode);
+            });
+        } catch (ex) { callback(''); }
     };
 
     // Use NPM to get list of versions
@@ -1020,17 +1094,17 @@ function CreateMeshCentralServer(config, args) {
                     // See if any database operations needs to be completed
                     if (obj.args.deletedomain) { obj.db.DeleteDomain(obj.args.deletedomain, function () { console.log('Deleted domain ' + obj.args.deletedomain + '.'); process.exit(); }); return; }
                     if (obj.args.deletedefaultdomain) { obj.db.DeleteDomain('', function () { console.log('Deleted default domain.'); process.exit(); }); return; }
-                    if (obj.args.showall) { obj.db.GetAll(function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
-                    if (obj.args.showusers) { obj.db.GetAllType('user', function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
+                    if (obj.args.showall) { obj.db.GetAll(function (err, docs) { process.stdout.write(JSON.stringify(docs, null, 2) + '\n', function () { process.exit(); }); }); return; }
+                    if (obj.args.showusers) { obj.db.GetAllType('user', function (err, docs) { process.stdout.write(JSON.stringify(docs, null, 2) + '\n', function () { process.exit(); }); }); return; }
                     if (obj.args.showitem) { obj.db.Get(obj.args.showitem, function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
                     if (obj.args.listuserids) { obj.db.GetAllType('user', function (err, docs) { for (var i in docs) { console.log(docs[i]._id); } process.exit(); }); return; }
-                    if (obj.args.showusergroups) { obj.db.GetAllType('ugrp', function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
-                    if (obj.args.shownodes) { obj.db.GetAllType('node', function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
-                    if (obj.args.showallmeshes) { obj.db.GetAllType('mesh', function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
-                    if (obj.args.showmeshes) { obj.db.GetAllType('mesh', function (err, docs) { var x = []; for (var i in docs) { if (docs[i].deleted == null) { x.push(docs[i]); } } console.log(JSON.stringify(x, null, 2)); process.exit(); }); return; }
-                    if (obj.args.showevents) { obj.db.GetAllEvents(function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
-                    if (obj.args.showsmbios) { obj.db.GetAllSMBIOS(function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
-                    if (obj.args.showpower) { obj.db.getAllPower(function (err, docs) { console.log(JSON.stringify(docs, null, 2)); process.exit(); }); return; }
+                    if (obj.args.showusergroups) { obj.db.GetAllType('ugrp', function (err, docs) { process.stdout.write(JSON.stringify(docs, null, 2) + '\n', function () { process.exit(); }); }); return; }
+                    if (obj.args.shownodes) { obj.db.GetAllType('node', function (err, docs) { process.stdout.write(JSON.stringify(docs, null, 2) + '\n', function () { process.exit(); }); }); return; }
+                    if (obj.args.showallmeshes) { obj.db.GetAllType('mesh', function (err, docs) { process.stdout.write(JSON.stringify(docs, null, 2) + '\n', function () { process.exit(); }); }); return; }
+                    if (obj.args.showmeshes) { obj.db.GetAllType('mesh', function (err, docs) { var x = []; for (var i in docs) { if (docs[i].deleted == null) { x.push(docs[i]); } } process.stdout.write(JSON.stringify(x, null, 2) + '\n', function () { process.exit(); }); }); return; }
+                    if (obj.args.showevents) { obj.db.GetAllEvents(function (err, docs) { process.stdout.write(JSON.stringify(docs, null, 2) + '\n', function () { process.exit(); }); }); return; }
+                    if (obj.args.showsmbios) { obj.db.GetAllSMBIOS(function (err, docs) { process.stdout.write(JSON.stringify(docs, null, 2) + '\n', function () { process.exit(); }); }); return; }
+                    if (obj.args.showpower) { obj.db.getAllPower(function (err, docs) { process.stdout.write(JSON.stringify(docs, null, 2) + '\n', function () { process.exit(); }); }); return; }
                     if (obj.args.clearpower) { obj.db.removeAllPowerEvents(function () { process.exit(); }); return; }
                     if (obj.args.showiplocations) { obj.db.GetAllType('iploc', function (err, docs) { console.log(docs); process.exit(); }); return; }
                     if (obj.args.logintoken) { obj.getLoginToken(obj.args.logintoken, function (r) { console.log(r); process.exit(); }); return; }
@@ -3337,7 +3411,7 @@ function CreateMeshCentralServer(config, args) {
         if (obj.config.settings.agentsignlock) { signUrl += '?ServerID=' + obj.certificateOperations.getPublicKeyHash(obj.certificates.agent.cert).toUpperCase(); }
 
         // Setup the time server
-        var timeStampUrl = 'http://timestamp.comodoca.com/authenticode';
+        var timeStampUrl = 'http://timestamp.sectigo.com';
         if (obj.args.agenttimestampserver === false) { timeStampUrl = null; }
         else if (typeof obj.args.agenttimestampserver == 'string') { timeStampUrl = obj.args.agenttimestampserver; }
 
@@ -4046,6 +4120,9 @@ function CreateMeshCentralServer(config, args) {
                 // Use a fixed cookie expire time
                 if (timeout == null) { timeout = 2; }
                 if ((o.dtime > (timeout * 60000)) || (o.dtime < -30000)) { obj.debug('cookie', 'ERR: Bad cookie due to timeout'); return null; } // The cookie is only valid 120 seconds, or 30 seconds back in time (in case other server's clock is not quite right)
+            } else if (o.r === 8) {
+                // Device share guest cookies carry the share's end as an absolute time in milliseconds.
+                if ((o.expire <= Date.now()) || (o.dtime < -30000)) { obj.debug('cookie', 'ERR: Bad cookie due to share expiration'); return null; }
             } else {
                 // An expire time is included in the cookie (in minutes), use this.
                 if ((o.expire !== 0) && ((o.dtime > (o.expire * 60000)) || (o.dtime < -30000))) { obj.debug('cookie', 'ERR: Bad cookie due to timeout'); return null; } // The cookie is only valid 120 seconds, or 30 seconds back in time (in case other server's clock is not quite right)
@@ -4075,6 +4152,9 @@ function CreateMeshCentralServer(config, args) {
                 // Use a fixed cookie expire time
                 if (timeout == null) { timeout = 2; }
                 if ((o.dtime > (timeout * 60000)) || (o.dtime < -30000)) { obj.debug('cookie', 'ERR: Bad cookie due to timeout'); return null; } // The cookie is only valid 120 seconds, or 30 seconds back in time (in case other server's clock is not quite right)
+            } else if (o.r === 8) {
+                // Device share guest cookies carry the share's end as an absolute time in milliseconds.
+                if ((o.expire <= Date.now()) || (o.dtime < -30000)) { obj.debug('cookie', 'ERR: Bad cookie due to share expiration'); return null; }
             } else {
                 // An expire time is included in the cookie (in minutes), use this.
                 if ((o.expire !== 0) && ((o.dtime > (o.expire * 60000)) || (o.dtime < -30000))) { obj.debug('cookie', 'ERR: Bad cookie due to timeout'); return null; } // The cookie is only valid 120 seconds, or 30 seconds back in time (in case other server's clock is not quite right)
@@ -4414,8 +4494,8 @@ var meshserver = null;
 var childProcess = null;
 var previouslyInstalledModules = {};
 function mainStart() {
-    // Check the NodeJS is version 22.21.1 or better.
-    if (!common.versionAtLeast(process.versions.node, '22.21.1')) { console.log("MeshCentral requires Node v22.21.1 or above, current version is " + process.version + "."); return; }
+    // Check the NodeJS is version 22.21.1 or better. If it is not, warn but still try to run.
+    if (!common.versionAtLeast(process.versions.node, '22.21.1')) { console.log("MeshCentral requires Node v22.21.1 or above, current version is " + process.version + ". MeshCentral may not work correctly."); }
 
     // If running within the node_modules folder, move working directory to the parent of the node_modules folder.
     if (__dirname.endsWith('\\node_modules\\meshcentral') || __dirname.endsWith('/node_modules/meshcentral')) { process.chdir(require('path').join(__dirname, '..', '..')); }
